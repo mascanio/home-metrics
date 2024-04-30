@@ -4,9 +4,14 @@ import (
 	"encoding/binary"
 	"flag"
 	"log"
+	"net/http"
 	"strings"
 
 	"tinygo.org/x/bluetooth"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var adapter = bluetooth.DefaultAdapter
@@ -27,6 +32,7 @@ func decodeHumid(in uint64) float64 {
 type metric struct {
 	temperature float64
 	humidity    float64
+	address     string
 }
 
 func scanMetrics(address string, CompanyID uint16, metricChan chan<- metric) {
@@ -40,6 +46,7 @@ func scanMetrics(address string, CompanyID uint16, metricChan chan<- metric) {
 			metricChan <- metric{
 				temperature: decodeTemperature(n),
 				humidity:    decodeHumid(n),
+				address:     device.Address.String(),
 			}
 		}
 	})
@@ -49,14 +56,38 @@ func scanMetrics(address string, CompanyID uint16, metricChan chan<- metric) {
 	log.Println("Scan stopped")
 }
 
+var (
+	salon_temperature = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "salon_temperature",
+		Help: "Temperature of the salon",
+	})
+	salon_humidity = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "salon_humidity",
+		Help: "Humidity of the salon",
+	})
+	sotano_temperature = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "sotano_temperature",
+		Help: "Temperature of the sotano",
+	})
+	sotano_humidity = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "sotano_humidity",
+		Help: "Humidity of the sotano",
+	})
+)
+
 func main() {
 	var (
-		companyID uint
-		mac       string
+		companyID      uint
+		mac            string
+		prometheusPort string
 	)
 	flag.UintVar(&companyID, "companyID", 60552, "Company ID of the device")
 	flag.StringVar(&mac, "mac", "A4:C1:38", "Part of the MAC address start of the device")
+	flag.StringVar(&prometheusPort, "prometheusPort", "2112", "Port for prometheus metrics")
 	flag.Parse()
+
+	http.Handle("/metrics", promhttp.Handler())
+	go http.ListenAndServe(":"+prometheusPort, nil)
 
 	if err := adapter.Enable(); err != nil {
 		log.Fatalln("Failed to enable the bluetooth adapter: ", err)
@@ -67,6 +98,13 @@ func main() {
 	go scanMetrics(mac, uint16(companyID), metricsChan)
 	for {
 		metric := <-metricsChan
-		log.Printf("Temperature: %.2f, Humidity: %.2f\n", metric.temperature, metric.humidity)
+		if metric.address == "A4:C1:38:5F:A4:E6" {
+			salon_temperature.Set(metric.temperature)
+			salon_humidity.Set(metric.humidity)
+		} else if metric.address == "A4:C1:38:B8:1A:4C" {
+			sotano_temperature.Set(metric.temperature)
+			sotano_humidity.Set(metric.humidity)
+		}
+		log.Printf("Temperature: %.2f, Humidity: %.2f, Address: %v\n", metric.temperature, metric.humidity, metric.address)
 	}
 }
