@@ -51,6 +51,7 @@ func ScanMetrics(address string, CompanyID uint16, metricChan chan<- metrics.Tem
 			rawData := device.ManufacturerData()[0].Data
 			data := append([]byte{0, 0, 0, 0}, rawData[:len(rawData)-2]...)
 			n := binary.BigEndian.Uint64(data)
+			log.Printf("Writting to channel %v %v %v\n", getDeviceName(device), decodeTemperature(n), decodeHumid(n))
 			metricChan <- metrics.TemperatureHumidity{
 				Temperature: decodeTemperature(n),
 				Humidity:    decodeHumid(n),

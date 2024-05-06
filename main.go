@@ -50,6 +50,7 @@ func main() {
 	defer close(temperatureHumidityChan)
 	go govee.ScanMetrics(mac, uint16(companyID), temperatureHumidityChan)
 	for {
+		log.Println("Waiting for metrics...")
 		metric := <-temperatureHumidityChan
 		if metric.Device == govee.DEVICE_SALON {
 			salon_temperature.Set(metric.Temperature)
