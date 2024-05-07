@@ -1,9 +1,11 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"net/http"
+	"os"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -32,23 +34,35 @@ var (
 	})
 )
 
+type config struct {
+	PrometheusPort string `yaml:"prometheus-port"`
+	Providers      struct {
+		Govee govee.Config
+	}
+}
+
 func main() {
-	var (
-		companyID      uint
-		mac            string
-		prometheusPort string
-	)
-	flag.UintVar(&companyID, "companyID", 60552, "Company ID of the device")
-	flag.StringVar(&mac, "mac", "A4:C1:38", "Part of the MAC address start of the device")
-	flag.StringVar(&prometheusPort, "prometheusPort", "2112", "Port for prometheus metrics")
-	flag.Parse()
+	var config config
+	configFile, err := os.ReadFile("config.yaml")
+	if err != nil {
+		panic(err)
+	}
+	err = yaml.Unmarshal(configFile, &config)
+	if err != nil {
+		panic(err)
+	}
 
 	http.Handle("/metrics", promhttp.Handler())
-	go http.ListenAndServe(":"+prometheusPort, nil)
+	go http.ListenAndServe(":"+config.PrometheusPort, nil)
 
 	temperatureHumidityChan := make(chan metrics.TemperatureHumidity)
 	defer close(temperatureHumidityChan)
-	go govee.ScanMetrics(mac, uint16(companyID), temperatureHumidityChan)
+
+	goveeProvider, err := govee.New(config.Providers.Govee)
+	if err != nil {
+		panic(err)
+	}
+	go goveeProvider.ScanMetrics(temperatureHumidityChan)
 	for {
 		log.Println("Waiting for metrics...")
 		metric := <-temperatureHumidityChan

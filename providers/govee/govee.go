@@ -9,6 +9,24 @@ import (
 	"tinygo.org/x/bluetooth"
 )
 
+type Config struct {
+	CompanyID uint16 `yaml:"company-id"`
+	Mac       string
+}
+
+type Govee struct {
+	adapter *bluetooth.Adapter
+	config  Config
+}
+
+func New(config Config) (Govee, error) {
+	rv := Govee{config: config, adapter: bluetooth.DefaultAdapter}
+	if err := rv.adapter.Enable(); err != nil {
+		return rv, err
+	}
+	return rv, nil
+}
+
 var (
 	DEVICE_SALON  = "salon"
 	DEVICE_TALLER = "taller"
@@ -38,16 +56,12 @@ func getDeviceName(device bluetooth.ScanResult) string {
 	}
 }
 
-func ScanMetrics(address string, CompanyID uint16, metricChan chan<- metrics.TemperatureHumidity) {
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		log.Fatalln("Failed to enable the bluetooth adapter: ", err)
-	}
+func (g *Govee) ScanMetrics(metricChan chan<- metrics.TemperatureHumidity) {
 	// Start scanning.
 	for {
 		log.Println("Scanning for devices...")
-		err := adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
-			if strings.Contains(device.Address.String(), address) && device.ManufacturerData()[0].CompanyID == CompanyID {
+		err := g.adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
+			if strings.Contains(device.Address.String(), g.config.Mac) && device.ManufacturerData()[0].CompanyID == g.config.CompanyID {
 				adapter.StopScan()
 				rawData := device.ManufacturerData()[0].Data
 				data := append([]byte{0, 0, 0, 0}, rawData[:len(rawData)-2]...)
@@ -63,7 +77,7 @@ func ScanMetrics(address string, CompanyID uint16, metricChan chan<- metrics.Tem
 		if err != nil {
 			log.Fatalln("Failed to scan: ", err)
 		}
-		adapter.StopScan()
+		g.adapter.StopScan()
 		log.Println("Scan stopped")
 	}
 }
