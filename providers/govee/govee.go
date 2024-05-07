@@ -14,8 +14,6 @@ var (
 	DEVICE_TALLER = "taller"
 )
 
-var adapter = bluetooth.DefaultAdapter
-
 func decodeTemperature(in uint64) float64 {
 	if in&0x800000 != 0 {
 		in &= 0x7FFFFF
@@ -41,26 +39,31 @@ func getDeviceName(device bluetooth.ScanResult) string {
 }
 
 func ScanMetrics(address string, CompanyID uint16, metricChan chan<- metrics.TemperatureHumidity) {
+	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
 		log.Fatalln("Failed to enable the bluetooth adapter: ", err)
 	}
 	// Start scanning.
-	log.Println("Scanning for devices...")
-	err := adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
-		if strings.Contains(device.Address.String(), address) && device.ManufacturerData()[0].CompanyID == CompanyID {
-			rawData := device.ManufacturerData()[0].Data
-			data := append([]byte{0, 0, 0, 0}, rawData[:len(rawData)-2]...)
-			n := binary.BigEndian.Uint64(data)
-			log.Printf("Writting to channel %v %v %v\n", getDeviceName(device), decodeTemperature(n), decodeHumid(n))
-			metricChan <- metrics.TemperatureHumidity{
-				Temperature: decodeTemperature(n),
-				Humidity:    decodeHumid(n),
-				Device:      getDeviceName(device),
+	for {
+		log.Println("Scanning for devices...")
+		err := adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
+			if strings.Contains(device.Address.String(), address) && device.ManufacturerData()[0].CompanyID == CompanyID {
+				adapter.StopScan()
+				rawData := device.ManufacturerData()[0].Data
+				data := append([]byte{0, 0, 0, 0}, rawData[:len(rawData)-2]...)
+				n := binary.BigEndian.Uint64(data)
+				log.Printf("Writting to channel %v %v %v\n", getDeviceName(device), decodeTemperature(n), decodeHumid(n))
+				metricChan <- metrics.TemperatureHumidity{
+					Temperature: decodeTemperature(n),
+					Humidity:    decodeHumid(n),
+					Device:      getDeviceName(device),
+				}
 			}
+		})
+		if err != nil {
+			log.Fatalln("Failed to scan: ", err)
 		}
-	})
-	if err != nil {
-		log.Fatalln("Failed to scan: ", err)
+		adapter.StopScan()
+		log.Println("Scan stopped")
 	}
-	log.Println("Scan stopped")
 }
