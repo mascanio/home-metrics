@@ -13,6 +13,7 @@ import (
 
 	"github.com/mascanio/home-metrics/metrics"
 	govee "github.com/mascanio/home-metrics/providers/govee"
+	"github.com/mascanio/home-metrics/providers/tapo"
 )
 
 var (
@@ -32,12 +33,17 @@ var (
 		Name: "sotano_humidity",
 		Help: "Humidity of the sotano",
 	})
+	sotano_power = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "sotano_power",
+		Help: "Power consumption",
+	})
 )
 
 type config struct {
 	PrometheusPort string `yaml:"prometheus-port"`
 	Providers      struct {
 		Govee govee.Config
+		Tapo  tapo.Config
 	}
 }
 
@@ -55,24 +61,34 @@ func main() {
 	http.Handle("/metrics", promhttp.Handler())
 	go http.ListenAndServe(":"+config.PrometheusPort, nil)
 
-	temperatureHumidityChan := make(chan metrics.TemperatureHumidity)
-	defer close(temperatureHumidityChan)
-
 	goveeProvider, err := govee.New(config.Providers.Govee)
 	if err != nil {
 		panic(err)
 	}
+	temperatureHumidityChan := make(chan metrics.TemperatureHumidity)
+	defer close(temperatureHumidityChan)
 	go goveeProvider.ScanMetrics(temperatureHumidityChan)
+
+	tapoProvider := tapo.New(config.Providers.Tapo)
+	powerChan := make(chan metrics.Power)
+	defer close(powerChan)
+	go tapoProvider.ScanMetrics(powerChan)
+
 	for {
 		log.Println("Waiting for metrics...")
-		metric := <-temperatureHumidityChan
-		if metric.Device == govee.DEVICE_SALON {
-			salon_temperature.Set(metric.Temperature)
-			salon_humidity.Set(metric.Humidity)
-		} else if metric.Device == govee.DEVICE_TALLER {
-			sotano_temperature.Set(metric.Temperature)
-			sotano_humidity.Set(metric.Humidity)
+		select {
+		case metric := <-temperatureHumidityChan:
+			if metric.Device == govee.DEVICE_SALON {
+				salon_temperature.Set(metric.Temperature)
+				salon_humidity.Set(metric.Humidity)
+			} else if metric.Device == govee.DEVICE_TALLER {
+				sotano_temperature.Set(metric.Temperature)
+				sotano_humidity.Set(metric.Humidity)
+			}
+			log.Printf("Temperature: %.2f, Humidity: %.2f, Device: %v\n", metric.Temperature, metric.Humidity, metric.Device)
+		case power := <-powerChan:
+			sotano_power.Set(power.Value)
+			log.Printf("Power from %v %v\n", power.Device, power.Value)
 		}
-		log.Printf("Temperature: %.2f, Humidity: %.2f, Device: %v\n", metric.Temperature, metric.Humidity, metric.Device)
 	}
 }

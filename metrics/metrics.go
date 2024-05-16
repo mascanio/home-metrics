@@ -5,3 +5,8 @@ type TemperatureHumidity struct {
 	Humidity    float64
 	Device      string
 }
+
+type Power struct {
+	Value  float64
+	Device string
+}
