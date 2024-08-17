@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/mascanio/home-metrics/metrics"
 	"tinygo.org/x/bluetooth"
@@ -45,8 +46,8 @@ func decodeHumid(in uint64) float64 {
 	return float64(uint64(in%1000)) / 10.0
 }
 
-func getDeviceName(device bluetooth.ScanResult) string {
-	switch device.Address.String() {
+func getDeviceName(addr string) string {
+	switch addr {
 	case "A4:C1:38:5F:A4:E6":
 		return DEVICE_SALON
 	case "A4:C1:38:B8:1A:4C":
@@ -56,28 +57,59 @@ func getDeviceName(device bluetooth.ScanResult) string {
 	}
 }
 
+func (g *Govee) shouldProcessDevice(device bluetooth.ScanResult) bool {
+	return strings.Contains(device.Address.String(), g.config.Mac) &&
+		device.ManufacturerData()[0].CompanyID == g.config.CompanyID
+}
+
+func parseTempHum(rawData []byte, deviceAddr string) metrics.TemperatureHumidity {
+	data := append([]byte{0, 0, 0, 0}, rawData[:len(rawData)-2]...)
+	n := binary.BigEndian.Uint64(data)
+	return metrics.TemperatureHumidity{
+		Temperature: decodeTemperature(n),
+		Humidity:    decodeHumid(n),
+		Device:      getDeviceName(deviceAddr),
+	}
+}
+
+func sc(g *Govee, metricChan chan<- metrics.TemperatureHumidity,
+	adapter *bluetooth.Adapter, scanRes bluetooth.ScanResult) {
+	log.Println(scanRes.LocalName(), " ", scanRes.Address)
+	if g.shouldProcessDevice(scanRes) {
+		_ = adapter.StopScan()
+		addrStr := scanRes.Address.String()
+		rawData := scanRes.ManufacturerData()[0].Data
+		metric := parseTempHum(rawData, addrStr)
+		log.Printf("Writting to channel %v %v %v\n", metric.Device,
+			metric.Temperature, metric.Humidity)
+		metricChan <- metric
+	}
+}
+
 func (g *Govee) ScanMetrics(metricChan chan<- metrics.TemperatureHumidity) {
-	// Start scanning.
+	doneChan := make(chan struct{})
+	defer close(doneChan)
 	for {
-		log.Println("Scanning for devices...")
-		err := g.adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
-			if strings.Contains(device.Address.String(), g.config.Mac) && device.ManufacturerData()[0].CompanyID == g.config.CompanyID {
-				adapter.StopScan()
-				rawData := device.ManufacturerData()[0].Data
-				data := append([]byte{0, 0, 0, 0}, rawData[:len(rawData)-2]...)
-				n := binary.BigEndian.Uint64(data)
-				log.Printf("Writting to channel %v %v %v\n", getDeviceName(device), decodeTemperature(n), decodeHumid(n))
-				metricChan <- metrics.TemperatureHumidity{
-					Temperature: decodeTemperature(n),
-					Humidity:    decodeHumid(n),
-					Device:      getDeviceName(device),
+		go func() {
+			defer func() {
+				_ = g.adapter.StopScan()
+				log.Println("Scan stopped")
+				doneChan <- struct{}{}
+				if recover() != nil {
+					log.Println("Recovered from panic")
 				}
+			}()
+			log.Println("Scanning for devices...")
+			err := g.adapter.Scan(func(a *bluetooth.Adapter, sr bluetooth.ScanResult) {
+				sc(g, metricChan, a, sr)
+			})
+			if err != nil {
+				log.Println("Failed to scan: ", err)
+			} else {
+				log.Println("Scanned")
 			}
-		})
-		if err != nil {
-			log.Fatalln("Failed to scan: ", err)
-		}
-		g.adapter.StopScan()
-		log.Println("Scan stopped")
+		}()
+		<-doneChan
+		time.Sleep(time.Second * 15)
 	}
 }
