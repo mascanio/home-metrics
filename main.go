@@ -49,7 +49,7 @@ type config struct {
 
 func main() {
 	var config config
-	configFile, err := os.ReadFile("config.yaml")
+	configFile, err := os.ReadFile(os.Args[1])
 	if err != nil {
 		panic(err)
 	}
